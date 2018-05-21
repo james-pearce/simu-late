@@ -1,0 +1,123 @@
+---
+title: "Optimization Script 00"
+output: html_notebook
+---
+
+I downloaded this script from https://github.com/fzhang612/r_utility_code/blob/master/mkt_opt.R
+
+
+## MARKETING OPTIMIZATION R-SCRIPT
+
+Thanks to Bob Agnew, raagnew1@gmail.com, www.raagnew.com.
+
+The algorithm imbedded in this script optimizes the assignment of offers to
+prospects, subject to stipulated offer quantity constraints and the limit of
+at most one offer per prospect [_we would want to change this by parameter_].  Remarkably, this demo problem, with a million prospects and three offers, solves in less than a minute on my home PC.  Previously,
+I solved it using SAS PROC NLP on a big server and the time required was much
+greater. Ref:
+www.raagnew.com/uploads/5/7/1/7/57174385/dual_solution_marketing_optimization.pdf
+
+This script can be adapted for a different number of offers and alternative
+equality or inequality constraints, as long as they can be linearized, although
+the dual must be formulated for solution.  Inequality constraints would require
+a different R solver (`nlminb`) which incorporates lower bounds. It is also possible to allow more than one offer per prospect.  
+
+```{r}
+date()
+```
+
+Set up number of prospects.
+
+```{r}
+n <- 1000000
+``` 
+
+
+Initialize prospect offer and profit at zero, i.e., no offer.
+
+```{r}
+Profit <- Offer <- rep(0,n)
+
+```
+
+### Simulate Prospect Profits for Three Offers
+
+Different profit vectors will be generated for each execution, which has the
+advantage of showing that solution is robust across various instances.
+
+```{r}
+p1 <- 100*runif(n,0,1) - 10
+p2 <- .6*p1 + .4*(60*runif(n,0,1) - 6)
+p3 <- .4*p1 + .6*(40*runif(n,0,1) - 4)
+
+```
+
+### Mean Offer Profits
+
+```{r}
+c(mean(p1),mean(p2),mean(p3))
+
+```
+
+### Stipulated Offer Quantities
+
+```{r}
+b <- c(300000,200000,100000)
+```
+
+### Dual Function
+
+```{r}
+dual <- function(u) {
+  d1 <- p1 - u[1]
+  d2 <- p2 - u[2]
+  d3 <- p3 - u[3]
+  v <- pmax(d1,d2,d3,rep(0,n))
+  y <- b%*%u + sum(v)
+  y
+}
+```
+
+### Dual Minimization using Nonlinear Minimization Function
+
+Here we are using the function `nlm` which is non-linear minimization. It takes a function to minimize and starting parameter values for the minimization as arguments.
+
+```{r}
+out <- nlm(dual,c(0,0,0), print.level = 1)
+# out
+```
+
+### Keep dual minimum and estimates.
+```{r}
+mindual <- out$minimum
+u <- out$estimate
+d1 <- p1 - u[1]
+d2 <- p2 - u[2]
+d3 <- p3 - u[3]
+v <- pmax(d1,d2,d3)
+ord <- order(v, decreasing = TRUE)
+s <- c(0,0,0)
+h <- 100000000
+for (j in 1:sum(b)) {
+  k <- s < b
+  m <- ord[j]
+  i <- which.max(c(k[1]*d1[m]-(1-k[1])*h,k[2]*d2[m]-(1-k[2])*h,k[3]*d3[m]-(1-k[3])*h))
+  Offer[m] <- i
+  Profit[m] <- c(p1[m],p2[m],p3[m])[i]
+  s[i] <- s[i] + 1
+}
+```
+
+
+```{r}
+mindual
+# Primal Optimum (Maximum Profit)
+sum(Profit)
+# Note that we are extremely close, in some instances right on.
+# Offer Quantities
+s
+# Offer Profits
+c(sum(Profit[Offer == 1]), sum(Profit[Offer == 2]), sum(Profit[Offer == 3]))
+```
+
+
