@@ -1,0 +1,305 @@
+---
+title: "Assigning students to courses"
+author: "Dirk Schumacher"
+date: "2016-12-16"
+output: html_notebook
+---
+
+
+## Introduction
+
+In this article we will look at [assignment problems](https://en.wikipedia.org/wiki/Generalized_assignment_problem). 
+
+As a real world example problem we would like to match a group of students to a set of courses with the following constraints:
+
+* Each course has a capacity
+* Every student needs to be assigned to exactly one course. 
+* All students have stated individual preferences on a scale from 1 to 3, where 3 is the most favorable course.
+
+## The data
+
+```{r}
+n_obs_new <- 27
+``` 
+
+We have four product types:
+
+  * car loan
+  * savings
+  * mortgage
+  * pension
+  
+Each product has a different `productValue`: the revenue that can be obtained for the product on average. To get a fair representation of marketing across the various offers, each is allocated a `budgetShare`. 
+
+```{r}
+products <- c("Car loan", "Savings", "Mortgage", "Pension")
+productValue <- c(100, 200, 300, 400)
+budgetShare <- c(0.6, 0.1, 0.2, 0.1)
+```
+
+Each product these can be offered over one of the following channels:
+
+  * gift
+  * newsletter
+  * seminar
+  
+Each of these channels has different costs, and each has a different _influence factor_. We use the influence to weight the estimated value of the response accordingly.
+
+```{r}
+channels <- c('gift', 'newsletter', 'seminar')
+cost <- c(20, 15, 23)
+factor <- c(0.2, 0.05, 0.3)
+# channel_share <- rep(1/3, 3)
+```
+
+Budget needs to be less than the available marketing budget of $500.
+
+```{r}
+availableBudget <- 500
+```
+
+Read in the offers data, originally from IBM and massaged. It gives the probability of taking an offer by each customer.
+
+Rather than using the full 10,000, test that it works on a smaller size.
+
+```{r}
+library(data.table)
+
+product_probs_orig <- fread('offers_ibm_pivot.csv')
+n_obs_original <- nrow(product_probs_orig)
+
+product_probs <- fread('sample_data_10000.csv')
+
+product_probs <- product_probs[seq(n_obs_new)]
+n_obs <- nrow(product_probs)
+
+adjustment_factor <- n_obs/n_obs_original
+availableBudget <- availableBudget*adjustment_factor
+
+# product_probs.rename(columns={'Unnamed: 0': 'customerid'}, inplace=True)
+setnames(product_probs, "V1", "customerid")
+head(product_probs)
+```
+
+Set up the numbers of channels, products and customers.
+
+```{r}
+num_customers <- nrow(product_probs)
+num_products <- length(products)
+num_channels <- length(channels)
+```
+
+```{r}
+# Create a function to make extracting easier
+profit <- function(i, j, k){
+  pr <- factor[k]*productValue[j]*product_probs[i, products[j], with = FALSE]
+  as.integer(round(pr))
+}
+
+profit(3, 1, 1)
+```
+
+```{r}
+library(ompr)
+model <- MIPModel() %>%
+  
+  # 1 if customer i is product j via channel k
+  add_variable(x[i, j, k], 
+               i = seq(num_customers), 
+               j = seq(num_products), k = seq(num_channels), 
+               type = "binary") %>%
+  
+  # maximize the revenue
+  set_objective(sum_expr(x[i, j, k]*profit(i, j, k),
+                         i = seq(num_customers),
+                         j = seq(num_products), k = seq(num_channels) )) %>%
+ 
+  # maximum of one offer per customer
+  add_constraint(sum_expr(x[i, j, k], j = seq(num_products),
+                          k = seq(num_channels)) <= 1,
+                 i = seq(num_customers)) %>%
+  
+  # do not exceed the budget
+  add_constraint(sum_expr(x[i, j, k]*cost[k], i = seq(num_customers),
+               j = seq(num_products),
+               k = seq(num_channels)) <= availableBudget) %>%
+  
+  # Balance the offers/customers among products
+  add_constraint(sum_expr(x[i, j, k], i = seq(num_customers),
+                          k = seq(num_channels)) <= budgetShare[j]*
+                   sum_expr(x[i, j, k], i = seq(num_customers),
+                         j = seq(num_products), k = seq(num_channels)),
+                 j = seq(num_products))
+model
+```
+
+## Solve
+
+```{r}
+library(ompr.roi)
+library(ROI.plugin.glpk)
+result <- solve_model(model, with_ROI(solver = "glpk", verbose = TRUE))
+```
+
+We solved the problem with an objective value of `r objective_value(result)`.
+
+```{r}
+objective_value(result)
+```
+
+
+```{r}
+matching <- result %>% 
+  # get_solution(x[i, j, k]) %>%
+  get_solution(x[i, j]) %>%
+  filter(value > 0) #%>%
+#   select(i, j, k) %>% 
+#   rowwise() %>% 
+#   mutate(weight = weight(as.numeric(i), as.numeric(j)), 
+#          preferences = paste0(preferences(as.numeric(i)), collapse = ",")) %>% ungroup
+```
+
+```{r}
+head(matching)
+```
+
+
+```{r}
+matching %>% 
+  group_by(weight) %>% 
+  summarise(count = n())
+```
+### The previous stuff --- hive off rather than delete _for now_
+We have $n$ students:
+```{r}
+n <- 40
+```
+
+And $m$ courses with equal capacity. The capacity can vary among courses though.
+```{r}
+m <- 4
+capacity <- rep.int(11, m) # all have equal capacities
+```
+
+In addition, each student has three preferences. To model this we have a function that gives us three courses for each student. The first component has perference 1, second 2, and third 3:
+```{r}
+set.seed(1234)
+preference_data <- lapply(seq_len(n), function(x) sample(seq_len(m), 3))
+preferences <- function(student) preference_data[[student]]
+```
+
+```{r}
+preferences(1)
+```
+
+The last component we need is a weight functions to make the model formulation easier.
+This function gives us the preference weighting for a course and student pair.
+
+```{r}
+# the weight of a student choosing a course
+# if the course is not among the preferences, the weight is -100000
+weight <- function(student, course) {
+  p <- which(as.numeric(course) == preferences(as.numeric(student)))
+  as.integer(if (length(p) == 0) {
+    -100000
+  } else {
+    p
+  })
+}
+```
+
+Some examples:
+```{r}
+weight(1, 3)
+weight(1, 23) # this was not a choice by student 1, so we give it a big penalty
+```
+
+## The model
+
+The idea is to introduce a binary variable $x_{i, j}$ that is $1$ if student $i$ is matched to course $j$. As an objective we will try to satisfy preferences according to their weight. So assigning a student to a course with preference 3 gives 3 points and so forth. The model assumes, that the total capacity of the courses is enough for all students.
+
+Here it is in mathematical notation:
+
+$$
+\begin{equation*}
+\begin{array}{ll@{}ll}
+\text{max}  & \displaystyle\sum\limits_{i=1}^{n}\sum\limits_{j=1}^{m}weight_{i,j} \cdot x_{i, j} & &\\
+\text{subject to}& \displaystyle\sum\limits_{i=1}^{n}   x_{i, j} \leq capacity_j,  & j=1 ,\ldots, m&\\
+                 & \displaystyle\sum\limits_{j=1}^{m}   x_{i, j} = 1,  & i=1 ,\ldots, n&\\
+                 &                                                x_{i,j} \in \{0,1\}, &i=1 ,\ldots, n, & j=1 ,\ldots, m
+\end{array}
+\end{equation*}
+$$
+
+Or directly in R:
+
+```{r, message=FALSE}
+library(ompr)
+model <- MIPModel() %>%
+  
+  # 1 iff student i is assigned to course m
+  add_variable(x[i, j], i = 1:n, j = 1:m, type = "binary") %>%
+  
+  # maximize the preferences
+  set_objective(sum_expr(weight(i, j) * x[i, j], i = 1:n, j = 1:m)) %>%
+  
+  # we cannot exceed the capacity of a course
+  add_constraint(sum_expr(x[i, j], i = 1:n) <= capacity[j], j = 1:m) %>% 
+  
+  # each student needs to be assigned to one course
+  add_constraint(sum_expr(x[i, j], j = 1:m) == 1, i = 1:n)
+model
+```
+
+## Solve the model
+
+We will use `glpk` to solve the above model.
+
+```{r}
+library(ompr.roi)
+library(ROI.plugin.glpk)
+result <- solve_model(model, with_ROI(solver = "glpk", verbose = TRUE))
+```
+
+We solved the problem with an objective value of `r objective_value(result)`.
+
+```{r}
+matching <- result %>% 
+  get_solution(x[i,j]) %>%
+  filter(value > .9) %>%  
+  select(i, j) %>% 
+  rowwise() %>% 
+  mutate(weight = weight(as.numeric(i), as.numeric(j)), 
+         preferences = paste0(preferences(as.numeric(i)), collapse = ",")) %>% ungroup
+```
+
+```{r}
+head(matching)
+```
+
+
+```{r}
+matching %>% 
+  group_by(weight) %>% 
+  summarise(count = n())
+```
+
+
+
+`r nrow(filter(matching, weight == 3))` students got their top preference.
+`r nrow(filter(matching, weight == 2))` students were assigned to their second choice and `r nrow(filter(matching, weight == 1))` students got their least preferable course.
+
+The course assignment now looks like this:
+
+```{r}
+plot_data <- matching %>% 
+  mutate(course = factor(j), weight = factor(weight, levels = c(1, 2, 3))) %>% 
+  group_by(course, weight) %>% 
+  summarise(count = n()) %>% 
+  tidyr::complete(weight, fill = list(count = 0))
+ggplot(plot_data, aes(x = course, y = count, fill = weight)) + 
+  geom_bar(stat = "identity") + 
+  viridis::scale_fill_viridis(discrete = TRUE) + 
+  geom_hline(yintercept = 11)
+```
+
