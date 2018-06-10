@@ -37,6 +37,9 @@ Set up number of prospects.
 
 ```{r}
 n_obs_new <- 10000
+optimized_count <- 400 # the number of customers used in the explicit optimization
+
+## see Python for more details
 ``` 
 
 We have four product types:
@@ -73,8 +76,8 @@ Now have 12 offers: product $\times$ channel.
 
 ```{r}
 # Calculate the number of offers: channel x product
-offer_scale <- n_obs_new/50
-offers <- c(2, 2, 1, 1, 6, 0, 0, 0, 0, 11, 13, 7)*offer_scale %>%
+offer_scale <- n_obs_new/optimized_count
+offers <- c(24, 4, 1, 11, 40, 0, 0, 0, 0, 79, 159, 23)*offer_scale %>%
   round 
 ```
 

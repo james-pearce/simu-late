@@ -19,7 +19,7 @@ As a real world example problem we would like to match a group of students to a 
 ## The data
 
 ```{r}
-n_obs_new <- 27
+n_obs_new <- 50
 ``` 
 
 We have four product types:
@@ -34,7 +34,7 @@ Each product has a different `productValue`: the revenue that can be obtained fo
 ```{r}
 products <- c("Car loan", "Savings", "Mortgage", "Pension")
 productValue <- c(100, 200, 300, 400)
-budgetShare <- c(0.6, 0.1, 0.2, 0.1)
+# budgetShare <- c(0.6, 0.1, 0.2, 0.1)
 ```
 
 Each product these can be offered over one of the following channels:
@@ -101,6 +101,8 @@ profit(3, 1, 1)
 
 ```{r}
 library(ompr)
+channel_min <- 5
+product_min <- 8
 model <- MIPModel() %>%
   
   # 1 if customer i is product j via channel k
@@ -124,12 +126,8 @@ model <- MIPModel() %>%
                j = seq(num_products),
                k = seq(num_channels)) <= availableBudget) %>%
   
-  # Balance the offers/customers among products
-  add_constraint(sum_expr(x[i, j, k], i = seq(num_customers),
-                          k = seq(num_channels)) <= budgetShare[j]*
-                   sum_expr(x[i, j, k], i = seq(num_customers),
-                         j = seq(num_products), k = seq(num_channels)),
-                 j = seq(num_products))
+# product and channel minimum constraints
+  
 model
 ```
 
