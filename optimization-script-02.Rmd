@@ -27,10 +27,17 @@ a different R solver (`nlminb`) which incorporates lower bounds. It is also poss
 
 Now that we have tested on $n = 50$, use the full 10,000 in the simulated file.
 
+```{r setup}
+knitr::opts_chunk$set(include = FALSE)
+library(magrittr)
+library(dplyr)
+library(data.table)
+library(dtplyr)
+library(stringr)
+```
+
 ```{r}
 date()
-
-library(magrittr)
 ```
 
 Set up number of prospects.
@@ -77,7 +84,7 @@ Now have 12 offers: product $\times$ channel.
 ```{r}
 # Calculate the number of offers: channel x product
 offer_scale <- n_obs_new/optimized_count
-offers <- c(24, 4, 1, 11, 40, 0, 0, 0, 0, 79, 159, 23)*offer_scale %>%
+offers <- c(24, 4, 1, 11, 40, 0, 0, 0, 0, 79, 129, 53)*offer_scale %>%
   round 
 ```
 
@@ -95,8 +102,6 @@ Read in the offers data, originally from IBM and massaged. It gives the probabil
 Rather than using the full 10,000, test that it works on a smaller size.
 
 ```{r}
-library(data.table)
-
 product_probs_orig <- fread('offers_ibm_pivot.csv')
 n_obs_original <- nrow(product_probs_orig)
 
@@ -116,7 +121,8 @@ head(product_probs)
 Calculate the profit vectors.
 
 ```{r}
-product_profit <- product_probs[, products, with = FALSE]*productValue
+product_profit <- sweep(product_probs[, products, with = FALSE], 2, 
+                        productValue, "*")
 product_profit_1 <- product_profit*factor[1]
 product_profit_2 <- product_profit*factor[2]
 product_profit_3 <- product_profit*factor[3]
@@ -145,6 +151,18 @@ dual <- function(u) {
 }
 ```
 
+```{r}
+# Test dual
+u_test <- c(11.2, 15, 6.02, 19.5, 0, 4.98, 2.23, 7.75, 50.2, 23.2, 9.09, 35.2)
+dual(u_test)
+```
+```{r}
+u_test <- rep(0, 12)
+dual(u_test)
+```
+```{r}
+apply(product_profit, 1, max) %>% head(10)
+```
 ### Dual Minimization using Nonlinear Minimization Function
 
 Here we are using the function `nlm` which is non-linear minimization. It takes a function to minimize and starting parameter values for the minimization as arguments.
@@ -164,23 +182,112 @@ u
 
 ```{r}
 d <- sweep(product_profit, 2, u)
-v <- apply(d, 1, max)
-v[v < 0] <- 0
-ord <- order(v, decreasing = TRUE)
-s <- offers*0
-```
-
-```{r}
 d_DT <- data.table(d)
 d_DT[, customerid := product_probs$customerid]
-d_DT[, v := v]
+# d_DT[, v := v]
 
-d_DT_melt <- melt(d_DT, id.vars = c("customerid", "v"))
-d_DT_alloc <- d_DT_melt[order(customerid, -value)][, lapply(.SD, head, 1), by = .(customerid)][seq(sum(offers))]
+# d_DT_melt <- melt(d_DT, id.vars = c("customerid", "v"))
+d_DT_melt <- melt(d_DT, id.vars = c("customerid"))
+d_DT_alloc <- d_DT_melt[order(customerid, -value)][, lapply(.SD, head, 1), by = .(customerid)]
 
 # check counts
 d_DT_alloc[, .N, by = .(variable)]
+
+# test
+# use contrasts/one-hot encoding
+d_DT_indicator <- model.matrix(~ variable - 1, d_DT_alloc) %>%
+  as.data.table 
+offer_names <- levels(d_DT_alloc$variable)
+setnames(d_DT_indicator, offer_names)
+d_DT_alloc_0 <- cbind(d_DT_alloc, d_DT_indicator)
+
+setorder(d_DT_alloc_0, -value)
+
+# Cumulatively sum each and compare with the target levels.
+d_DT_alloc_0[, c(offer_names) := lapply(.SD, cumsum), 
+             .SDcols=offer_names]
+
+# Now I need to find which one hits the maximum offers first.
+n_alloc <- nrow(d_DT_alloc_0)
+offers_min <- offers*0 # copy shape and names
+offers_min[] <- n_alloc # fill with maximum
+for (j in seq_along(offers)){
+  if (offers[j] > 0) {
+    offers_min[j] <- min(seq(n_alloc)[d_DT_alloc_0[[j + 3L]] >= offers[j]])
+  }
+}
+offers_min %>% which.min
+offers_min %>% min
 ```
+ This means we are hitting the limit with the pension seminar at position `r offers_min %>% min`. 
+ 
+```{r}
+# add an index to data table
+d_DT_alloc_0[, idx := .I]
+allocation_final_DT <- d_DT_alloc_0[idx <= min(offers_min)][, idx := NULL]
+
+# update offers with remaining
+# offers_rem <- offers - 
+offers_alloc <- allocation_final_DT[, .N, by=.(variable)]
+offers_rem <- offers
+offers_match <- match(offers_alloc$variable, offer_names)
+offers_rem[offers_match] <- offers_rem[offers_match] - offers_alloc$N
+offers_rem
+
+# could remove all the zeros earlier
+
+```
+ 
+Now repeat the exercise with the remainder. 
+
+```{r}
+repeat {
+  d_DT_melt_rem <- d_DT_melt[!(customerid %in% allocation_final_DT[["customerid"]])]
+  d_DT_melt_rem <- d_DT_melt_rem[!(variable %in% offer_names[offers_rem == 0])]
+  
+  d_DT_alloc <- d_DT_melt_rem[order(customerid, -value)][, lapply(.SD, head, 1), by = .(customerid)]
+  
+  d_DT_indicator <- model.matrix(~ variable - 1, d_DT_alloc) %>%
+    as.data.table 
+  offer_names <- levels(d_DT_alloc$variable)
+  setnames(d_DT_indicator, offer_names)
+  d_DT_alloc_0 <- cbind(d_DT_alloc, d_DT_indicator)
+  
+  setorder(d_DT_alloc_0, -value)
+
+  # Cumulatively sum each and compare with the target levels.
+  d_DT_alloc_0[, c(offer_names) := lapply(.SD, cumsum), 
+               .SDcols=offer_names]
+  
+  n_alloc <- nrow(d_DT_alloc_0)
+  offers_min <- offers*0 # copy shape and names
+  offers_min[] <- n_alloc # fill with maximum
+  for (j in seq_along(offers)){
+    if (offers_rem[j] > 0) {
+      offers_min[j] <- min(seq(n_alloc)[d_DT_alloc_0[[j + 3L]] >= offers_rem[j]])
+    }
+  }
+  
+  cat("Allocation reached for offer: ", offer_names[which.min(offers_min)], "\n")
+  
+  # add an index to data table
+  d_DT_alloc_0[, idx := .I]
+  allocation_final_DT <- rbind(allocation_final_DT, d_DT_alloc_0[idx <= min(offers_min)][, idx := NULL])
+  
+  # update offers with remaining
+  # offers_rem <- offers - 
+  offers_alloc <- allocation_final_DT[, .N, by=.(variable)]
+  offers_rem <- offers
+  offers_match <- match(offers_alloc$variable, offer_names)
+  offers_rem[offers_match] <- offers_rem[offers_match] - offers_alloc$N
+  # offers_rem
+  
+  if (sum(offers_rem) == 0) break
+}
+```
+
+
+
 
 Calculate the cost and profit.
 
@@ -192,7 +299,7 @@ product_profit_DT[, customerid := product_probs$customerid]
 product_profit_DT <- melt(product_profit_DT, id.vars = c("customerid"))
 setnames(product_profit_DT, "value", "profit")
 
-product_profit_DT <- merge(d_DT_alloc, product_profit_DT, 
+product_profit_DT <- merge(allocation_final_DT, product_profit_DT, 
                            by = c("customerid", "variable"), 
                            all.x = TRUE)
 
@@ -203,15 +310,35 @@ setnames(channel_costs, c("Channel", "cost"))
 product_profit_DT[, Channel := word(variable, -1)]
 product_profit_DT <- merge(product_profit_DT, channel_costs, 
                        by = "Channel", all.x = TRUE)
-setorder(product_profit_DT, -v)
-product_profit_DT[, cum_cost := cumsum(cost)]
-product_profit_DT[, cum_profit := cumsum(profit)]
-product_profit_DT <- product_profit_DT[cum_cost <= availableBudget]
+# setorder(product_profit_DT, -v)
+product_profit_DT[, product := word(variable, 1,
+                                    str_count(as.character(variable),
+                                              boundary("word")) - 1)]
+# product_profit_DT[, cum_cost := cumsum(cost)]
+# product_profit_DT[, cum_profit := cumsum(profit)]
+# product_profit_DT <- product_profit_DT[cum_cost <= availableBudget]
 
 
 ```
 
+### Overall results
 ```{r}
-product_profit_DT[, .(profit = sum(profit), budget = sum(cost))]
+product_profit_DT[, .(profit = sum(profit), budget = sum(cost), .N)]
+```
+
+### Results by channel
+```{r}
+product_profit_DT[, .(profit = sum(profit), 
+                      budget = sum(cost), .N),
+                  by=.(channel=Channel)
+                  ]
+
+```
+### Results by product
+```{r}
+product_profit_DT[, .(profit = sum(profit), 
+                      budget = sum(cost), .N),
+                  by=.(product)
+                  ]
 ```
 
