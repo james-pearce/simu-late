@@ -2,6 +2,11 @@
 title: "Optimization Script 01"
 output: html_notebook
 ---
+```{r}
+# Copyright 2018 James Pearce, 3 Crowns Consulting Pty Ltd
+
+```
+
 
 Adjust the script from Bob Agnew to take in the dummy data developed for the IBM marketing optimization example. https://github.com/fzhang612/r_utility_code/blob/master/mkt_opt.R
 
