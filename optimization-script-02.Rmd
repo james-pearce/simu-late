@@ -157,13 +157,27 @@ dual <- function(u) {
 ```
 
 ```{r}
+dual <- function(u, pp) {
+  if (dim(pp)[2] != length(u)) {
+    print(c(dim(pp)[2], length(u)))
+    stop("Mismatched dimensions")
+    }
+  d <- sweep(pp, 2, u)
+  v <- apply(d, 1, max) 
+  v[v < 0] <- 0
+  y <- offers%*%u + sum(v)
+  y
+}
+```
+
+```{r}
 # Test dual
 u_test <- c(11.2, 15, 6.02, 19.5, 0, 4.98, 2.23, 7.75, 50.2, 23.2, 9.09, 35.2)
-dual(u_test)
+dual(u_test, product_profit)
 ```
 ```{r}
 u_test <- rep(0, 12)
-dual(u_test)
+dual(u_test, product_profit)
 ```
 ```{r}
 apply(product_profit, 1, max) %>% head(10)
@@ -174,7 +188,7 @@ Here we are using the function `nlm` which is non-linear minimization. It takes 
 
 ```{r}
 u_init <- offers*0
-out <- nlm(dual, u_init, print.level = 1)
+out <- nlm(dual, u_init, pp=product_profit, print.level = 1)
 ```
 
 ### Keep dual minimum and estimates.
