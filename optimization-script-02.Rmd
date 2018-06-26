@@ -361,3 +361,17 @@ product_profit_DT[, .(profit = sum(profit),
                   ]
 ```
 
+### Final allocation
+
+Write the final allocation out to a CSV file for integration with campaign systems.
+
+```{r}
+setkey(product_profit_DT, customerid)
+setkey(product_probs, customerid)
+
+merge(product_profit_DT, product_probs[, .(customerid, name)], by="customerid")[
+  , .(customerid, Name=name, Channel, Product=product)
+] %>% fwrite(file.path(data_path, "scenario-max-revenue.csv"))
+
+```
+
