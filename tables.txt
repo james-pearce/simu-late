@@ -1,0 +1,18 @@
+TABLE_NAME|TABLE_TYPE|TABLE_SCHEMA
+----------|----------|------------
+Scenario|BASE TABLE|Dim
+Region|BASE TABLE|Dim
+Constituent|BASE TABLE|Dim
+Campaign|BASE TABLE|Dim
+ConstituentCampaignRole|BASE TABLE|Fact
+CampaignExpense|BASE TABLE|Fact
+Registration|BASE TABLE|Fact
+CampaignHistory|BASE TABLE|Fact
+ConstituentCommunicationPreference|BASE TABLE|Fact
+Donations|BASE TABLE|Fact
+ConstituentParticipation|BASE TABLE|dbo
+ConstituentView|BASE TABLE|dbo
+SegmentationCommunicationPreferences|BASE TABLE|dbo
+ConstituentRFMSegment|BASE TABLE|dbo
+
+(14 rows affected)

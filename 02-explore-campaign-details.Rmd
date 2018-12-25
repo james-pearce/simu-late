@@ -1,0 +1,40 @@
+---
+title: "Explore CC campaign details"
+output: html_notebook
+---
+
+```{r setup}
+knitr::opts_chunk$set(include = FALSE)
+library(dplyr)
+library(data.table)
+library(magrittr)
+library(dtplyr)
+data_path <- "./data/NSW Cancer Council"
+```
+
+```{r}
+constituent_participation_history_DT <- readRDS(file=file.path(data_path, "constituent_participation_history.rds"))
+
+```
+
+```{r}
+fact_donations_DT <- readRDS(file.path(data_path, "fact_donations.rds"))
+
+```
+
+```{r}
+constituent_participation_history_DT %>% head(10)
+```
+
+```{r}
+constituent_participation_history_DT[CampaignYear == 2018, 
+                                     .(.N, 
+                                       Donations=sum(DonationAmount),
+                                       Fundrased=sum(FundraisedAmount)),
+                                     by=.(Campaign)][order(-N)]
+```
+
+```{r}
+fact_donations_DT[, .N, by=.(CampaignSKey)] %>% head(10)
+```
+

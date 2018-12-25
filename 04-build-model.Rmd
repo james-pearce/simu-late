@@ -1,0 +1,72 @@
+---
+title: "04-build-model"
+output: html_notebook
+---
+
+```{r setup}
+library(data.table)
+library(magrittr)
+library(h2o)
+```
+
+Read in the data.
+
+```{r}
+model_dt <- readRDS("model_dt.rds")
+```
+
+What does the response variable look like?
+```{r}
+sample_prop = 0.1
+set.seed(730)
+model_sample <- model_dt[sample(.N, .N*sample_prop)]
+```
+
+
+Start up H2O.
+```{r}
+h2o.init()
+```
+
+Upload the data to an H2O frame.
+```{r}
+model_h2o <- as.h2o(model_sample, id="model_h2o")
+# model_h2o$response <- as.factor(ifelse(model_h2o$response > 0, 1, 0))
+```
+
+Create splits.
+```{r}
+model_split <- h2o.splitFrame(model_h2o, destination_frames=c("train", "test"), seed=2121)
+train <- model_split[[1]]
+test <- model_split[[2]]
+```
+
+Build models.
+```{r}
+y <-"response"
+x <- names(model_dt)
+x <- x[seq(2, length(x) - 1)]
+auto_ml <- h2o.automl(x, y, train, test, max_runtime_secs=300)
+```
+
+```{r}
+auto_ml
+```
+
+
+
+```{r}
+
+auto_ml@leader
+```
+```{r}
+h2o.saveModel(auto_ml@leader, getwd())
+```
+
+
+
+
+```{r}
+h2o.shutdown()
+```
+

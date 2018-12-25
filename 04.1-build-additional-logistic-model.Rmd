@@ -1,0 +1,73 @@
+---
+title: "04.1-build-additional-logistic-model"
+output: html_notebook
+---
+
+# Introduction
+
+The purpose of this model is to create an additive component for the channel flags. We can use this in the optimisation to alter the value of the expected return.
+
+```{r setup}
+library(data.table)
+library(magrittr)
+library(h2o)
+```
+
+Read in the data.
+
+```{r}
+model_dt <- readRDS("model_dt.rds")
+sample_prop = 0.1
+set.seed(730)
+model_sample <- model_dt[sample(.N, .N*sample_prop)]
+```
+
+Start up H2O.
+```{r}
+h2o.init()
+```
+
+Upload the data to an H2O frame.
+```{r}
+model_h2o <- as.h2o(model_sample, id="model_h2o")
+# model_h2o$response <- as.factor(ifelse(model_h2o$response > 0, 1, 0))
+```
+
+Create splits.
+```{r}
+model_split <- h2o.splitFrame(model_h2o, destination_frames=c("train", "test"), seed=2121)
+train <- model_split[[1]]
+test <- model_split[[2]]
+```
+
+Load saved models. These do not include the channel flag.
+
+```{r}
+tree_model <- h2o.loadModel("/Users/jamespearce/repos/simu-late/GBM_grid_0_AutoML_20180914_074804_model_0")
+```
+
+Get predictions from the model.
+```{r}
+preds <- h2o.predict(tree_model, newdata=model_h2o)
+model_h2o$expected_value <- preds
+```
+```{r}
+y <- "response"
+x <- c("Email", "Mail", "SMS", "TM")
+channel_regression <- h2o.glm(x, y, model_h2o, model_id="channel_regression", seed=1438, offset_column="expected_value", intercept=FALSE, alpha=0, lambda=0)
+```
+
+```{r}
+channel_regression
+```
+What happens without the offset term?
+```{r}
+channel_regression_0 <- h2o.glm(x, y, model_h2o, model_id="channel_regression", seed=1438, intercept=FALSE, alpha=0, lambda=0)
+channel_regression_0
+```
+
+
+```{r}
+h2o.shutdown()
+```
+

@@ -1,0 +1,343 @@
+---
+title: "03 Explore data"
+output: html_notebook
+---
+
+Explore the NSW Cancer Council data.
+
+```{r setup}
+library(data.table)
+library(magrittr)
+library(lubridate)
+```
+
+
+Read in the data from the RDS.
+
+
+
+```{r}
+comms_history_dt <- readRDS("comms_history_dt.rds")
+donations_dt <- readRDS('data/NSW Cancer Council/donations.rds')
+campaign_dt <- readRDS("campaign_dt.rds")
+
+```
+
+
+### Create cut-down versions
+```{r}
+comms_history_sample <- comms_history_dt[(ProgramName == "Appeals / OG") & (DateSent >= "2015-04-01"), ]
+saveRDS(comms_history_sample, "comms_history_sample.rds")
+```
+
+```{r}
+comms_history_sample <- readRDS("comms_history_sample.rds")
+```
+
+```{r}
+comms_history_sample[year(DateSent) == 2017, .N, by=.(CampaignGroupName, AppealCode)][order(CampaignGroupName, -N)]
+```
+```{r}
+comms_history_sample[year(DateSent) == 2017] %>% head
+```
+```{r}
+channel_lookup <- unique(campaign_dt, by=c("AppealCode", "ChannelName"))[ChannelName != "Not Applicable" & AppealCode != "Not Applicable", 
+                                                       .(AppealCode, ChannelName)]
+channel_lookup[, .N, by=.(AppealCode)][N > 1]
+comms_history_sample[year(DateSent) == 2017, .N]
+comms_history_sample <- channel_lookup[comms_history_sample, on=.(AppealCode)] 
+```
+
+
+
+```{r}
+setorder(comms_history_sample, ConstituentSKey, DateSent)
+```
+
+Look at the channels by appeal code.
+```{r}
+comms_history_sample[year(DateSent) == 2017, .N, by=.(AppealCode, ChannelName)][order(-N)]
+```
+
+
+Keen only the responses whose constituents match with the communications history.
+```{r}
+constits <- comms_history_sample[, ConstituentSKey] %>% unique
+donations_sample <- donations_dt[DonorConstituentSKey %in% constits,]
+setorder(donations_sample, DonorConstituentSKey)
+saveRDS(donations_sample, "donations_sample.rds")
+```
+
+```{r}
+# comms_history_unique <- comms_history_sample[, .(ConstituentSKey, ProgramName, CampaignGroupName, CampaignUnitName,
+#                                                  CampaignYear, AppealCode, PackageCode_clean, PackageName_clean)] %>% 
+#   unique 
+```
+
+Merge the top 3 appeals with the donations table.
+
+```{r}
+donation_responses <- merge(comms_history_sample,
+      donations_sample, 
+      by.x=c("ConstituentSKey", "PackageCode_clean"),
+      by.y=c("DonorConstituentSKey", "PackageID"),
+      all.x=TRUE
+      )
+saveRDS(donation_responses, "donation_responses.rds")
+```
+
+
+
+```{r}
+# Clean up the stuff
+rm(comms_history_dt, donations_dt)
+gc()
+```
+
+## Create the features
+```{r}
+date_this <- '2017-04-01' %>% as.Date
+recency_ft <- function(date, date_current, duration_last=ddays(365)){
+  # date : vector of dates to transform
+  # date_current : the assumed current date (ignore after this)
+  # duration_last : earliest date to consider as measured from date_current (duration)
+  # **return** : days since last transaction
+
+  
+  answer <- as.duration(date_current - date) %>%
+    as.numeric("days")
+  answer[is.na(date)] <- NA
+  answer[date > date_current] <- NA
+  answer[date < (date_current - duration_last)] <- duration_last %>% as.numeric("days")
+  return(answer)
+} 
+
+dates <- c("2017-02-04", "2017-01-01", "2017-04-02", "2015-04-02", "2017-02-05", NA) %>% as.Date
+recency_ft(dates, date_this)
+
+
+```
+```{r}
+date_this <- '2017-04-01' %>% as.Date
+aggregate_ft <- function(value, date, date_current, FUN=sum, duration_last=ddays(365)){
+  # value : value to be aggregated
+  # date : date to transform
+  # date_current : the assumed current date (ignore after this)
+  # FUN : aggregation function
+  # duration_last : earliest date to consider as measured from date_current (duration)
+  # **return** : days since last transaction
+  value[date > date_current] <- NA
+  value[date < (date_current - duration_last)] <- NA
+  value[is.na(date)] <- NA
+  answer <- FUN(value[!is.na(value)])
+  return(answer)
+}
+
+dates <- c("2017-02-04", "2017-01-01", "2017-04-02", "2015-04-02", "2017-02-05", NA) %>% as.Date
+values <- c(2, 4, 8, 16, NA, 12)
+aggregate_ft(values, dates, date_this) # 6
+aggregate_ft(values, dates, date_this, length) # 2
+
+```
+```{r}
+setkey(donations_sample, DonorConstituentSKey)
+donations_sample[, DonationDate := as.Date(DonationDate)]
+
+```
+
+```{r}
+date_this <- '2017-04-01' %>% as.Date
+```
+
+
+```{r}
+# Use this to develop features before running them on the big data set.
+donations_prototype <- donations_sample[DonorConstituentSKey > -2][1:10000]
+```
+
+```{r}
+min_NA <- function(vec){
+  as.numeric(ifelse(all(is.na(vec)), NA, min(vec, na.rm=TRUE)))
+}
+
+min_NA(c(NA, NA, NA))
+min_NA(c(1, 2, NA))
+```
+
+Takes a long time to run. Prototype the other features on a sample as well as this feature.
+```{r}
+run_it <- FALSE
+if (run_it){
+  st <- Sys.time()
+  donations_features <- donations_sample[, 
+                         .(recency_3y=min_NA(recency_ft(DonationDate, date_this, dyears(3))),
+                          frequency_3m=aggregate_ft(DonationAmount, DonationDate, date_this, length,
+                                                    ddays(90)),
+                          frequency_6m=aggregate_ft(DonationAmount, DonationDate, date_this, length, ddays(180)),
+                          frequency_1y=aggregate_ft(DonationAmount, DonationDate, date_this, length, dyears(1)),
+                          frequency_2y=aggregate_ft(DonationAmount, DonationDate, date_this, length, dyears(2)),
+                          frequency_3y=aggregate_ft(DonationAmount, DonationDate, date_this, length, dyears(3)),
+                          value_3m=aggregate_ft(DonationAmount, DonationDate, date_this, sum, ddays(90)),
+                          value_6m=aggregate_ft(DonationAmount, DonationDate, date_this, sum, ddays(180)),
+                          value_1y=aggregate_ft(DonationAmount, DonationDate, date_this, sum, dyears(1)),
+                          value_2y=aggregate_ft(DonationAmount, DonationDate, date_this, sum, dyears(2)),
+                          value_3y=aggregate_ft(DonationAmount, DonationDate, date_this, sum, dyears(3))
+                          ),
+                            by=.(DonorConstituentSKey)]
+  Sys.time() - st
+}
+```
+
+Save this as it takes 1 1/2 hours.
+```{r}
+saveRDS(donations_features, "donations_features.rds")
+```
+
+
+## Communications features
+
+Develop the following features:
+
+  * recency and frequency as per donations
+  * number of campaign groups
+  * (optional) recency by campaign group
+  * last communication group
+
+Take a sample for prototyping.
+```{r}
+comms_history_prototype <- comms_history_sample[ConstituentSKey > -2][1:100000]
+```
+
+Need a new function to find the most recent item.
+
+```{r}
+nth_ft <- function(value, date, date_current, index=1, duration_last=ddays(365)){
+  # value : value to be find the nth most recent
+  # date : date to transform and sort
+  # date_current : the assumed current date (ignore after this)
+  # index : the nth last version to return, ie 1 = last
+  # duration_last : earliest date to consider as measured from date_current (duration)
+  # **return** : sorted value at index
+  value[date > date_current] <- NA
+  value[date < (date_current - duration_last)] <- NA
+  value[is.na(date)] <- NA
+  value <- value[rev(order(date))]
+  value <- value[!is.na(value)]
+  answer <- value[index]
+  return(answer)
+}
+
+dates <- c("2017-02-04", "2017-01-01", "2017-02-02", "2015-04-02", "2017-02-05", NA) %>% as.Date
+values <- c(2, 4, 8, 16, NA, 12)
+nth_ft(values, dates, date_this) # 2
+nth_ft(values, dates, date_this, 2) # 8
+
+```
+## Channels in the last 3 months
+```{r}
+comms_history_sample[, .N, by=.(ChannelName)]
+```
+
+
+```{r}
+channel_flags <- comms_history_sample[(DateSent > (date_this - dyears(1))) & (DateSent <= date_this), length(ConstituentSKey), by=.(ConstituentSKey, ChannelName)][!is.na(ChannelName)] %>% 
+  dcast(ConstituentSKey ~ ChannelName, value.var="V1")
+
+for (j in seq_len(ncol(channel_flags)))
+    set(channel_flags, which(is.na(channel_flags[[j]])), j, 0)
+
+saveRDS(channel_flags, "channel_flags.rds")
+```
+
+
+```{r}
+run_it <- FALSE
+# run_it <- TRUE
+
+if (run_it){
+  # comms_history_features <- comms_history_prototype[, 
+  comms_history_features <- comms_history_sample[,
+                                                  .(
+                          comm_recency_3y=min_NA(recency_ft(DateSent, date_this, dyears(3))),
+                          comm_frequency_3m=aggregate_ft(PackageCode_clean, DateSent, date_this, length,
+                                                    ddays(90)),
+                          comm_frequency_6m=aggregate_ft(PackageCode_clean, DateSent, date_this, length, ddays(180)),
+                          comm_frequency_1y=aggregate_ft(PackageCode_clean, DateSent, date_this, length, dyears(1)),
+                          comm_frequency_2y=aggregate_ft(PackageCode_clean, DateSent, date_this, length, dyears(2)),
+                          comm_frequency_3y=aggregate_ft(PackageCode_clean, DateSent, date_this, length,
+                                                         dyears(3)),
+                          comm_unique_3m=aggregate_ft(CampaignGroupName, DateSent, date_this,
+                                                   function(x) length(unique(x)), ddays(90)),
+                          comm_unique_6m=aggregate_ft(CampaignGroupName, DateSent, date_this,
+                                                   function(x) length(unique(x)), ddays(180)),
+                          comm_unique_1y=aggregate_ft(CampaignGroupName, DateSent, date_this,
+                                                   function(x) length(unique(x)), dyears(1)),
+                          comm_unique_2y=aggregate_ft(CampaignGroupName, DateSent, date_this,
+                                                   function(x) length(unique(x)), dyears(2)),
+                          comm_unique_3y=aggregate_ft(CampaignGroupName, DateSent, date_this,
+                                                   function(x) length(unique(x)), dyears(3)),
+                          last_comm=nth_ft(CampaignGroupName, DateSent, date_this, 1, dyears(3))
+                                                  ),
+                          by=.(ConstituentSKey)
+                          ]
+}
+
+```
+
+```{r}
+# saveRDS(comms_history_features, "comms_history_features.RDS")
+comms_history_features <- readRDS("comms_history_features.RDS")
+
+```
+
+Find the campaigns in the last three months before `date_this`.
+```{r}
+comms_history_campaign_features <- comms_history_sample[(DateSent <= date_this) & (DateSent >= (date_this - ddays(180))), 
+                     .(flag=1), 
+                     by=.(ConstituentSKey, CampaignGroupName)
+                     ] %>%
+  dcast(ConstituentSKey ~ CampaignGroupName, value.var="flag", fill=0)
+```
+
+Find the responses by `ConstituentSKey`.
+```{r}
+donations_response_features <- donations_sample[(DonationDate >= date_this) & (DonationDate <= (date_this + ddays(90))), 
+                                               .(response=sum(DonationAmount, na.rm=T)), 
+                                               by=.(ConstituentSKey=DonorConstituentSKey)]
+```
+
+
+Merge everything together.
+```{r}
+model_dt <- merge(comms_history_features, donations_features, by.x="ConstituentSKey", by.y="DonorConstituentSKey", all.x=TRUE) %>%
+  merge(comms_history_campaign_features, by="ConstituentSKey", all.x=TRUE) %>%
+  merge(donations_response_features, by="ConstituentSKey", all.x=TRUE)
+model_dt <- model_dt[ConstituentSKey > 0]
+model_dt %>% head
+```
+```{r}
+model_dt <- merge(model_dt, channel_flags, by="ConstituentSKey", all.x=TRUE)
+```
+
+Probably need to check for NAs and change accordingly.
+
+```{r}
+model_dt <- model_dt[!is.na(comm_recency_3y)]
+# get rid of the NAs
+
+to_replace <- names(model_dt[25:32])
+for (j in to_replace)
+  set(model_dt, which(is.na(model_dt[[j]])), j, 0)
+
+model_dt %>% head
+```
+
+
+```{r}
+saveRDS(model_dt, "model_dt.rds")
+```
+
+```{r}
+model_dt <- readRDS("model_dt.rds")
+```
+

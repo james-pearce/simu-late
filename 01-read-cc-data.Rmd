@@ -1,0 +1,76 @@
+---
+title: "Read in NSW Cancel Council Data"
+output: html_notebook
+---
+
+```{r setup}
+# Copyright 2018 James Pearce, 3 Crowns Consulting Pty Ltd
+library(dplyr)
+library(magrittr)
+library(data.table)
+library(dtplyr)
+```
+
+```{r}
+# files
+# ConstituentCommunicationPreferences.txt	DimConstituent.txt
+# ConstituentParticipationHistory.txt	FactCampaignHistory.txt
+# ConstituentSummary.txt			FactDonations.txt
+# DimCampaign.txt
+
+data_path <- "./data/NSW Cancer Council"
+data_files <- c("ConstituentCommunicationPreferences.txt", "DimConstituent.txt",
+                "ConstituentParticipationHistory.txt",
+                "FactCampaignHistory.txt",
+                "ConstituentSummary.txt", "FactDonations.txt", "DimCampaign.txt")
+
+
+```
+
+```{r}
+campaign_DT <- fread(file.path(data_path, "dimCampaign.csv"))
+```
+
+```{r}
+# campaign_history_DT <- fread(file.path(data_path, "factCampaignHistory.csv"))
+```
+
+
+```{r}
+# campaign_history_DT <- fread(file.path(data_path, data_files[4]))
+fact_donations_DT <- fread(file.path(data_path, data_files[6]))
+```
+```{r}
+saveRDS(fact_donations_DT, file.path(data_path, "fact_donations.rds"))
+```
+
+```{r}
+# constituent_DT <- fread(file.path(data_path, data_files[2]))
+# didn't work
+# campaign_DT <- fread(file.path(data_path, data_files[7]))
+# didn't work
+constituent_participation_history_DT <- fread(file.path(data_path,
+                                                        data_files[3]))
+```
+```{r}
+saveRDS(constituent_participation_history_DT, file=file.path(data_path, "constituent_participation_history.rds"))
+```
+
+```{r}
+constituent_summary_DT <- fread(file.path(data_path, data_files[5]))
+```
+
+```{r}
+saveRDS(constituent_summary_DT, file.path(data_path, "constituent_summary.rds"))
+```
+
+```{r}
+constituent_communication_preferences_DT <- fread(file.path(data_path,
+                                                            data_files[1]))
+```
+
+```{r}
+constituent_communication_preferences_DT %>% head(10)
+```
+
+Copyright 2018 James Pearce, 3 Crowns Consulting Pty Ltd

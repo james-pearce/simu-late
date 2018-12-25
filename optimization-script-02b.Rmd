@@ -1,0 +1,342 @@
+---
+title: "Optimization Script 01"
+output: html_notebook
+---
+
+Adjust the script from Bob Agnew to take in the dummy data developed for the IBM marketing optimization example. https://github.com/fzhang612/r_utility_code/blob/master/mkt_opt.R
+
+> In the future may be able to adapt other constraints to this example, but need to understand the dual solution. In the meantime, can brute force it given the speed of computation.
+
+The algorithm imbedded in this script optimizes the assignment of offers to
+prospects, subject to stipulated offer quantity constraints and the limit of
+at most one offer per prospect.
+
+This script can be adapted for a different number of offers and alternative
+equality or inequality constraints, as long as they can be linearized, although
+the dual must be formulated for solution.  Inequality constraints would require
+a different R solver (`nlminb`) which incorporates lower bounds. It is also possible to allow more than one offer per prospect.  
+
+
+| Run | Size | Time (s)  | Value  | Dual value | Dual budget |
+|-----|------|-----------|--------|------------|-------------|
+|   1 |  27  |  0.9      |    603 |            |             |
+|   2 |  50  |  1.8      |  1 283 |  1 168     |             |
+|   3 |  75  |  0.25     |  1 975 |            |             |
+|   4 |  85  |  0.55     |  2 227 |            |             |
+|   5 |  90  |   --      |  --    |            |             |
+
+Now that we have tested on $n = 50$, use the full 10,000 in the simulated file.
+
+```{r setup}
+knitr::opts_chunk$set(include = FALSE)
+library(magrittr)
+library(dplyr)
+library(data.table)
+library(dtplyr)
+library(stringr)
+```
+
+```{r}
+date()
+```
+
+Set up number of prospects.
+
+```{r}
+n_obs_new <- 10000
+optimized_count <- 400 # the number of customers used in the explicit optimization
+
+## see Python for more details
+``` 
+
+We have four product types:
+
+  * car loan
+  * savings
+  * mortgage
+  * pension
+  
+Each product has a different `productValue`: the revenue that can be obtained for the product on average. To get a fair representation of marketing across the various offers, each is allocated a `budgetShare`. 
+
+```{r}
+products <- c("Car loan", "Savings", "Mortgage", "Pension")
+productValue <- c(100, 200, 300, 400)
+budgetShare <- c(0.6, 0.1, 0.2, 0.1)
+```
+
+Each product these can be offered over one of the following channels:
+
+  * gift
+  * newsletter
+  * seminar
+  
+Each of these channels has different costs, and each has a different _influence factor_. We use the influence to weight the estimated value of the response accordingly.
+
+```{r}
+channels <- c('gift', 'newsletter', 'seminar')
+cost <- c(20, 15, 23)
+factor <- c(0.2, 0.05, 0.3)
+# channel_share <- rep(1/3, 3)
+```
+
+Now have 12 offers: product $\times$ channel.
+
+```{r}
+# Calculate the number of offers: channel x product
+offer_scale <- n_obs_new/optimized_count
+offers <- c(0, 0, 0, 0, # newsletter ?
+            0, 0, 0, 0, # gift ?
+            2, 108, 146, 64)*offer_scale %>%   # seminar
+  round 
+```
+
+
+
+
+Budget needs to be less than the available marketing budget of $500.
+
+```{r}
+availableBudget <- 500
+```
+
+Read in the offers data, originally from IBM and massaged. It gives the probability of taking an offer by each customer.
+
+Rather than using the full 10,000, test that it works on a smaller size.
+
+```{r}
+product_probs_orig <- fread('offers_ibm_pivot.csv')
+n_obs_original <- nrow(product_probs_orig)
+
+product_probs <- fread('sample_data_10000.csv')
+
+product_probs <- product_probs[seq(n_obs_new)]
+n_obs <- nrow(product_probs)
+
+adjustment_factor <- n_obs/n_obs_original
+availableBudget <- availableBudget*adjustment_factor
+
+# product_probs.rename(columns={'Unnamed: 0': 'customerid'}, inplace=True)
+setnames(product_probs, "V1", "customerid")
+head(product_probs)
+```
+
+Calculate the profit vectors.
+
+```{r}
+product_profit <- product_probs[, products, with = FALSE]*productValue
+product_profit_1 <- product_profit*factor[1]
+product_profit_2 <- product_profit*factor[2]
+product_profit_3 <- product_profit*factor[3]
+names(product_profit_1) <- paste(names(product_profit_1), channels[1])
+names(product_profit_2) <- paste(names(product_profit_2), channels[2])
+names(product_profit_3) <- paste(names(product_profit_3), channels[3])
+
+product_profit <- cbind(product_profit_1,
+                        product_profit_2,
+                        product_profit_3)
+```
+
+### Dual Function
+
+```{r}
+dual <- function(u) {
+  if (dim(product_profit)[2] != length(u)) {
+    print(c(dim(product_profit)[2], length(u)))
+    stop("Mismatched dimensions")
+    }
+  d <- sweep(product_profit, 2, u)
+  v <- apply(d, 1, max) 
+  v[v < 0] <- 0
+  y <- offers%*%u + sum(v)
+  y
+}
+```
+
+### Dual Minimization using Nonlinear Minimization Function
+
+Here we are using the function `nlm` which is non-linear minimization. It takes a function to minimize and starting parameter values for the minimization as arguments.
+
+```{r}
+u_init <- offers*0
+out <- nlm(dual, u_init, print.level = 1)
+```
+
+### Keep dual minimum and estimates.
+```{r}
+mindual <- out$minimum
+u <- out$estimate
+mindual
+u
+```
+
+```{r}
+d <- sweep(product_profit, 2, u)
+v <- apply(d, 1, max)
+v[v < 0] <- 0
+ord <- order(v, decreasing = TRUE)
+s <- offers*0
+```
+
+```{r}
+d_DT <- data.table(d)
+d_DT[, customerid := product_probs$customerid]
+d_DT[, v := v]
+
+d_DT_melt <- melt(d_DT, id.vars = c("customerid", "v"))
+d_DT_alloc <- d_DT_melt[order(customerid, -value)][, lapply(.SD, head, 1), by = .(customerid)]
+
+# check counts
+d_DT_alloc[, .N, by = .(variable)]
+
+# test
+# use contrasts/one-hot encoding
+d_DT_indicator <- model.matrix(~ variable - 1, d_DT_alloc) %>%
+  as.data.table 
+offer_names <- levels(d_DT_alloc$variable)
+setnames(d_DT_indicator, offer_names)
+d_DT_alloc_0 <- cbind(d_DT_alloc, d_DT_indicator)
+
+setorder(d_DT_alloc_0, -value)
+
+# Cumulatively sum each and compare with the target levels.
+d_DT_alloc_0[, c(offer_names) := lapply(.SD, cumsum), 
+             .SDcols=offer_names]
+
+# Now I need to find which one hits the maximum offers first.
+n_alloc <- nrow(d_DT_alloc_0)
+offers_min <- offers*0 # copy shape and names
+offers_min[] <- n_alloc # fill with maximum
+for (j in seq_along(offers)){
+  if (offers[j] > 0) {
+    offers_min[j] <- min(seq(n_alloc)[d_DT_alloc_0[[j + 4L]] >= offers[j]])
+  }
+}
+offers_min %>% which.min
+offers_min %>% min
+```
+ This means we are hitting the limit with the pension seminar at position 7996. 
+ 
+```{r}
+# add an index to data table
+d_DT_alloc_0[, idx := .I]
+allocation_final_DT <- d_DT_alloc_0[idx <= min(offers_min)][, idx := NULL]
+
+# update offers with remaining
+# offers_rem <- offers - 
+offers_alloc <- allocation_final_DT[, .N, by=.(variable)]
+offers_rem <- offers
+offers_match <- match(offers_alloc$variable, offer_names)
+offers_rem[offers_match] <- offers_rem[offers_match] - offers_alloc$N
+offers_rem
+
+# could remove all the zeros earlier
+
+```
+ 
+Now repeat the exercise with the remainder. 
+
+```{r}
+repeat {
+  d_DT_melt_rem <- d_DT_melt[!(customerid %in% allocation_final_DT[["customerid"]])]
+  d_DT_melt_rem <- d_DT_melt_rem[!(variable %in% offer_names[offers_rem == 0])]
+  
+  d_DT_alloc <- d_DT_melt_rem[order(customerid, -value)][, lapply(.SD, head, 1), by = .(customerid)]
+  
+  d_DT_indicator <- model.matrix(~ variable - 1, d_DT_alloc) %>%
+    as.data.table 
+  offer_names <- levels(d_DT_alloc$variable)
+  setnames(d_DT_indicator, offer_names)
+  d_DT_alloc_0 <- cbind(d_DT_alloc, d_DT_indicator)
+  
+  setorder(d_DT_alloc_0, -value)
+  
+  # Cumulatively sum each and compare with the target levels.
+  d_DT_alloc_0[, c(offer_names) := lapply(.SD, cumsum), 
+               .SDcols=offer_names]
+  
+  n_alloc <- nrow(d_DT_alloc_0)
+  offers_min <- offers*0 # copy shape and names
+  offers_min[] <- n_alloc # fill with maximum
+  for (j in seq_along(offers)){
+    if (offers_rem[j] > 0) {
+      offers_min[j] <- min(seq(n_alloc)[d_DT_alloc_0[[j + 4L]] >= offers_rem[j]])
+    }
+  }
+  
+  cat("Allocation reached for offer: ", offer_names[which.min(offers_min)], "\n")
+  
+  # add an index to data table
+  d_DT_alloc_0[, idx := .I]
+  allocation_final_DT <- rbind(allocation_final_DT, d_DT_alloc_0[idx <= min(offers_min)][, idx := NULL])
+  
+  # update offers with remaining
+  # offers_rem <- offers - 
+  offers_alloc <- allocation_final_DT[, .N, by=.(variable)]
+  offers_rem <- offers
+  offers_match <- match(offers_alloc$variable, offer_names)
+  offers_rem[offers_match] <- offers_rem[offers_match] - offers_alloc$N
+  # offers_rem
+  
+  if (sum(offers_rem) == 0) break
+}
+```
+
+
+
+
+Calculate the cost and profit.
+
+```{r}
+library(stringr)
+
+product_profit_DT <- data.table(product_profit)
+product_profit_DT[, customerid := product_probs$customerid]
+product_profit_DT <- melt(product_profit_DT, id.vars = c("customerid"))
+setnames(product_profit_DT, "value", "profit")
+
+product_profit_DT <- merge(allocation_final_DT, product_profit_DT, 
+                           by = c("customerid", "variable"), 
+                           all.x = TRUE)
+
+channel_costs <- data.table(channels, cost)
+setnames(channel_costs, c("Channel", "cost"))
+# extract channel from variable
+
+product_profit_DT[, Channel := word(variable, -1)]
+product_profit_DT <- merge(product_profit_DT, channel_costs, 
+                       by = "Channel", all.x = TRUE)
+setorder(product_profit_DT, -v)
+product_profit_DT[, product := word(variable, 1,
+                                    str_count(as.character(variable),
+                                              boundary("word")) - 1)]
+product_profit_DT[, cum_cost := cumsum(cost)]
+product_profit_DT[, cum_profit := cumsum(profit)]
+product_profit_DT <- product_profit_DT[cum_cost <= availableBudget]
+
+
+```
+
+### Overall results
+```{r}
+product_profit_DT[, .(profit = sum(profit), budget = sum(cost), .N)]
+```
+
+### Results by channel
+```{r}
+product_profit_DT[, .(profit = sum(profit), 
+                      budget = sum(cost), .N),
+                  by=.(channel=Channel)
+                  ]
+
+```
+### Results by product
+```{r}
+product_profit_DT[, .(profit = sum(profit), 
+                      budget = sum(cost), .N),
+                  by=.(product)
+                  ]
+```
+
+## Calculate the baseline figures
+
+Here I have the concept of a _baseline_. In the first instance, the baseline is a naive calculation: maximise row-wise profit.
