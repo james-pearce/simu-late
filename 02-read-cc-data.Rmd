@@ -1,0 +1,113 @@
+---
+title: "Read in NSW Cancer Council Data"
+output: html_document
+---
+
+For this data reading, I have used SQL commands and information provided by Maddi to extract data from the docker image into CSV files
+
+```{r setup}
+# Copyright 2018 James Pearce, 3 Crowns Consulting Pty Ltd
+# library(dplyr)
+library(magrittr)
+library(data.table)
+# library(dtplyr)
+```
+
+
+
+```{r}
+
+data_path <- "./data/NSW Cancer Council"
+data_files <- c("communication_history.csv",
+                "dim_campaign.csv"
+                )
+```
+
+Because SQL Server `sqlcmd` spits out data in a semi-formatted way (and that's what I used), the second line needs to be removed.  Create a function for reading in the data.
+
+```{r}
+fread_sqlserver <- function(file){
+  dt_body <- fread(file, skip=2, na.strings="NULL")
+  dt_head <- fread(file, nrows=0)
+  setnames(dt_body, names(dt_head))
+  return(dt_body)
+}
+```
+
+
+```{r}
+campaign_DT <- fread_sqlserver(file.path(data_path, data_files[2]))
+```
+
+```{r}
+comms_history_DT <- fread_sqlserver(file.path(data_path, data_files[1]))
+```
+
+Save the files in a better format.
+
+```{r}
+saveRDS(comms_history_DT, "comms_history_dt.rds")
+```
+```{r}
+saveRDS(campaign_DT, "campaign_dt.rds")
+```
+
+### Constituent information
+
+`dbo.ConstituentView`
+```{r}
+constituent_view_dt <- fread_sqlserver(file.path(data_path, 
+                                                 "constituent_view.csv"))
+```
+
+`Dim.Constituent` has not been read in. It doesn't contain segments and has a lot of fields, requiring the maximum row to be greater than 1024.
+
+Though you would have to think `dbo.ConstituentRFMSegment` will contain RFM segment information. Let's examine.
+
+```{r}
+constituent_RFM_dt <- fread_sqlserver(file.path(data_path, 
+                                                 "constituent_RFM.csv"))
+```
+```{r}
+saveRDS(constituent_RFM_dt, "constituent_RFM.rds")
+```
+
+```{r}
+donations_dt <- fread_sqlserver(file.path(data_path, "donations.csv"))
+```
+
+
+```{r}
+saveRDS(donations_dt, file.path(data_path, "donations.rds"))
+```
+
+```{r}
+# constituent_DT <- fread(file.path(data_path, data_files[2]))
+# didn't work
+# campaign_DT <- fread(file.path(data_path, data_files[7]))
+# didn't work
+constituent_participation_history_DT <- fread(file.path(data_path,
+                                                        data_files[3]))
+```
+```{r}
+saveRDS(constituent_participation_history_DT, file=file.path(data_path, "constituent_participation_history.rds"))
+```
+
+```{r}
+constituent_summary_DT <- fread(file.path(data_path, data_files[5]))
+```
+
+```{r}
+saveRDS(constituent_summary_DT, file.path(data_path, "constituent_summary.rds"))
+```
+
+```{r}
+constituent_communication_preferences_DT <- fread(file.path(data_path,
+                                                            data_files[1]))
+```
+
+```{r}
+constituent_communication_preferences_DT %>% head(10)
+```
+
+Copyright 2018 James Pearce, 3 Crowns Consulting Pty Ltd
